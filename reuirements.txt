@@ -1,0 +1,5 @@
+ultralytics==8.3.149
+scikit-learn==1.4.0
+tensorflow==2.11.0
+scikit-image==0.22.0
+filterpy==1.4.5

@@ -1,0 +1,24 @@
+# Virtual Environments
+venv39/
+venv311/
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# IDE and editor folders
+.idea/
+.vscode/
+
+# Data and Output files
+# The data folder should be created manually by the user
+# deep_sort folder should clone from github 
+data/
+deep_sort/
+out.mp4
+*.log
+
+# Model files
+# The yolov8n.pt model will be downloaded automatically on first run
+yolov8n.pt
