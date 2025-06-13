@@ -31,6 +31,9 @@ tracker = Tracker()
 # Generate more distinct colors if you expect many tracks
 colors = [(random.randint(0, 255), random.randint(0, 255), random.randint(0, 255)) for _ in range(20)] # Increased range
 
+# Keeps track of each person's suspicious status
+suspicious_history = {}
+
 detection_threshold = 0.5
 while ret:
 
@@ -53,46 +56,61 @@ while ret:
         tracker.update(frame, detections)
 
                 # --- Detect suspicious behaviors ---
+                # Run suspicious behavior detection
         suspicious_detections = suspicious_detector.detect(frame)
-
-        # --- Match suspicious boxes with tracked people ---
         matched, unmatched = suspicious_detector.match_with_tracks(suspicious_detections, tracker.tracks)
-
-        # --- Draw matched suspicious persons ---
+        
+        # Update suspicion state for matched persons
         for track, suspicion in matched:
-            x1, y1, x2, y2 = map(int, track.bbox)
             track_id = track.track_id
-            label = suspicion["label"]
-            score = suspicion["score"]
-
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 3)
-            cv2.putText(frame, f"ID: {track_id} | {label} ({score})", (x1, y1 - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-
-            print(f"[SUSPICIOUS] ID {track_id}: {label} ({score})")
-
-        # --- Draw unmatched suspicious detections (e.g. arson with no person nearby) ---
+            suspicious_history[track_id] = suspicion  # Save the latest suspicion info
+        
+        # For unmatched suspicious behavior (e.g., no person nearby)
         for suspicion in unmatched:
             x1, y1, x2, y2 = suspicion["bbox"]
             label = suspicion["label"]
             score = suspicion["score"]
-
+        
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 3)
             cv2.putText(frame, f"{label} ({score})", (x1, y1 - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-
+        
             print(f"[SUSPICIOUS] No person: {label} ({score}) at ({x1}, {y1})")
 
 
+        # for track in tracker.tracks:
+        #     bbox = track.bbox
+        #     x1, y1, x2, y2 = bbox
+        #     track_id = track.track_id
+
+        #     cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (colors[track_id % len(colors)]), 3)
+        #     # Optionally, display track_id
+        #     cv2.putText(frame, f"ID: {track_id}", (int(x1), int(y1) - 10), cv2.FONT_HERSHEY_SIMPLEX,
+        #                 0.9, (colors[track_id % len(colors)]), 2)
+
         for track in tracker.tracks:
-            bbox = track.bbox
-            x1, y1, x2, y2 = bbox
+            x1, y1, x2, y2 = map(int, track.bbox)
             track_id = track.track_id
 
-            cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (colors[track_id % len(colors)]), 3)
-            # Optionally, display track_id
-            cv2.putText(frame, f"ID: {track_id}", (int(x1), int(y1) - 10), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.9, (colors[track_id % len(colors)]), 2)
+            color = colors[track_id % len(colors)]
+            label_text = f"ID: {track_id}"
+
+            # Check if this person has been suspicious previously
+            if track_id in suspicious_history:
+                suspicion = suspicious_history[track_id]
+                label = suspicion["label"]
+                score = suspicion["score"]
+                label_text += f" | {label} ({score})"
+                color = (0, 0, 255)  # Red if suspicious
+
+                print(f"[SUSPICIOUS] ID {track_id}: {label} ({score})")
+
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
+            cv2.putText(frame, label_text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+
+    # Clean up suspicious history for disappeared tracks
+    current_ids = {t.track_id for t in tracker.tracks}
+    suspicious_history = {tid: val for tid, val in suspicious_history.items() if tid in current_ids}
 
 
     # Display the resulting frame
