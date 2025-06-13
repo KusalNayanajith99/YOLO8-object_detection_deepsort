@@ -7,6 +7,8 @@ from ultralytics import YOLO
 # Assuming your tracker.py is in the same directory or accessible
 from tracker import Tracker
 
+from suspicious_detector import SuspiciousDetector
+
 
 video_path = os.path.join('.', 'data', 'people.mp4')
 video_out_path = os.path.join('.', 'out.mp4')
@@ -22,6 +24,7 @@ cap_out = cv2.VideoWriter(video_out_path, cv2.VideoWriter_fourcc(*'mp4v'), cap.g
                           (frame.shape[1], frame.shape[0])) # Changed MP4V to mp4v
 
 model = YOLO("yolov8n.pt")
+suspicious_detector = SuspiciousDetector("yolov8_suspicious_behaviors.pt")
 
 tracker = Tracker()
 
@@ -48,6 +51,38 @@ while ret:
                 detections.append([x1, y1, x2, y2, score])
 
         tracker.update(frame, detections)
+
+                # --- Detect suspicious behaviors ---
+        suspicious_detections = suspicious_detector.detect(frame)
+
+        # --- Match suspicious boxes with tracked people ---
+        matched, unmatched = suspicious_detector.match_with_tracks(suspicious_detections, tracker.tracks)
+
+        # --- Draw matched suspicious persons ---
+        for track, suspicion in matched:
+            x1, y1, x2, y2 = map(int, track.bbox)
+            track_id = track.track_id
+            label = suspicion["label"]
+            score = suspicion["score"]
+
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 3)
+            cv2.putText(frame, f"ID: {track_id} | {label} ({score})", (x1, y1 - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+
+            print(f"[SUSPICIOUS] ID {track_id}: {label} ({score})")
+
+        # --- Draw unmatched suspicious detections (e.g. arson with no person nearby) ---
+        for suspicion in unmatched:
+            x1, y1, x2, y2 = suspicion["bbox"]
+            label = suspicion["label"]
+            score = suspicion["score"]
+
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 3)
+            cv2.putText(frame, f"{label} ({score})", (x1, y1 - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+
+            print(f"[SUSPICIOUS] No person: {label} ({score}) at ({x1}, {y1})")
+
 
         for track in tracker.tracks:
             bbox = track.bbox
