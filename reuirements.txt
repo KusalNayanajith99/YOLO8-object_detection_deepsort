@@ -3,3 +3,6 @@ scikit-learn==1.4.0
 tensorflow==2.11.0
 scikit-image==0.22.0
 filterpy==1.4.5
+pymongo==2.13.0
+torchreid==0.2.5
+gdown==5.2.0
