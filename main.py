@@ -11,7 +11,8 @@ from database import DatabaseManager
 
 # --- Configuration ---
 CAMERA_ID = "Camera_A" # Unique ID for this camera stream
-MONGO_URI = "mongodb+srv://kusal:1234@cluster-cctv.7sultup.mongodb.net/?retryWrites=true&w=majority&appName=Cluster-CCTV" # Your MongoDB connection string
+# MONGO_URI = "mongodb+srv://kusal:1234@cluster-cctv.7sultup.mongodb.net/?retryWrites=true&w=majority&appName=Cluster-CCTV" # Your MongoDB connection string
+MONGO_URI = "mongodb+srv://dulaniruwanthika99:zxEA6iEfqb8xKCnb@cluster-cctv.cbpifgp.mongodb.net/?retryWrites=true&w=majority&appName=Cluster-CCTV"
 VIDEO_PATH = os.path.join('.', 'data', 'people.mp4')
 VIDEO_OUT_PATH = os.path.join('.', 'out.mp4')
 DETECTION_THRESHOLD = 0.5
