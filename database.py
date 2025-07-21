@@ -20,7 +20,7 @@ class DatabaseManager:
         print(f"Loaded {len(cache)} profiles into feature cache.")
         return cache
     
-    def match_or_create_person(self, new_feature, camera_id, bbox):
+    def match_or_create_person(self, new_feature, camera_id, bbox, suspicious_category="normal"):
         """
         Tries to match a feature vector to an existing person.
         If no match is found, creates a new person profile.
@@ -31,7 +31,7 @@ class DatabaseManager:
         max_similarity = -1
 
         if not self.feature_cache: # Handle case where cache is empty
-            return self.create_new_person(new_feature, camera_id, bbox)
+            return self.create_new_person(new_feature, camera_id, bbox, suspicious_category)
 
         # Search for the best match in the cache
         for global_id, gallery in self.feature_cache.items():
@@ -44,14 +44,14 @@ class DatabaseManager:
         if max_similarity > self.similarity_threshold:
             # Matched an existing person
             global_id = best_match_id
-            self.update_person(global_id, new_feature, camera_id, bbox)
+            self.update_person(global_id, new_feature, camera_id, bbox, suspicious_category)
         else:
             # No suitable match found, create a new person
-            global_id = self.create_new_person(new_feature, camera_id, bbox)
+            global_id = self.create_new_person(new_feature, camera_id, bbox, suspicious_category)
 
         return global_id
     
-    def create_new_person(self, feature, camera_id, bbox):
+    def create_new_person(self, feature, camera_id, bbox, suspicious_category="normal"):
         """Creates a new document for a new person."""
         person_doc = {
             "source_id": None, # Can be updated later (e.g., employee ID)
@@ -64,7 +64,8 @@ class DatabaseManager:
                 "ts": datetime.utcnow(),
                 "cam": camera_id,
                 "loc": [int(c) for c in bbox]
-            }]
+            }],
+            "suspicious_category": suspicious_category  # 🆕 New field
         }
         result = self.collection.insert_one(person_doc)
         global_id = str(result.inserted_id)
@@ -73,13 +74,14 @@ class DatabaseManager:
         print(f"Created new person with global ID: {global_id}")
         return global_id
     
-    def update_person(self, global_id, new_feature, camera_id, bbox):
+    def update_person(self, global_id, new_feature, camera_id, bbox, suspicious_category="normal"):
         """Updates an existing person's profile."""
         update_query = {
             "$set": {
                 "last_seen_timestamp": datetime.utcnow(),
                 "last_seen_camera_id": camera_id,
-                "status": "active"
+                "status": "active",
+                "suspicious_category": suspicious_category  # 🆕 Update with latest category
             },
             "$push": {
                 "feature_gallery": new_feature.tolist(),

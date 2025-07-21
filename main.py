@@ -7,6 +7,7 @@ import torch
 from tracker import Tracker
 from feature_extractor import OSNetExtractor
 from database import DatabaseManager
+from suspicion_detector import SuspicionDetector
 
 
 # --- Configuration ---
@@ -26,6 +27,7 @@ db_manager = DatabaseManager(mongo_uri=MONGO_URI)
 feature_extractor = OSNetExtractor(model_name='osnet_x1_0', device=device)
 tracker = Tracker(feature_extractor=feature_extractor)
 model = YOLO("yolov8n.pt")
+suspicion_detector = SuspicionDetector("suspicious_detector.pt")
 
 # Video I/O
 cap = cv2.VideoCapture(VIDEO_PATH)
@@ -60,6 +62,21 @@ while ret:
     # 2. Tracking (with OSNet feature extraction inside)
     tracker.update(frame, detections)
 
+    # --- NEW: Run suspicious activity detection ---
+    suspicion_map = {}  # 🆕 Maps global_id to suspicious_category
+    suspicion_results = suspicion_detector.model(frame)[0]
+    for box in suspicion_results.boxes:
+        label = suspicion_detector.model.names[int(box.cls)]
+        x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+        # You could improve matching here using IoU and assign to nearby person
+        for track in tracker.tracks:
+            tbx1, tby1, tbx2, tby2 = map(int, track.bbox)
+            if not (x2 < tbx1 or x1 > tbx2 or y2 < tby1 or y1 > tby2):  # crude overlap
+                local_id = track.track_id
+                feature = track.feature
+                global_id = db_manager.match_or_create_person(feature, CAMERA_ID, track.bbox, suspicious_category=label)
+                suspicion_map[global_id] = label
+
     # 3. Database Matching and Profile Update
     for track in tracker.tracks:
         local_id = track.track_id
@@ -77,15 +94,24 @@ while ret:
         
         # Get the simple display ID for drawing
         display_id = global_to_display_id_map[global_id]
-    
+
+        # Get suspicious category (if exists from detection), default to 'normal'
+        suspicious_category = suspicion_map.get(global_id, "normal")
+
+        # --- 🆕 Update person with suspicion category ---
+        db_manager.update_person(global_id, feature, CAMERA_ID, bbox, suspicious_category)
+
         # 4. Visualization
         x1, y1, x2, y2 = map(int, bbox)
         color = colors[display_id % len(colors)] # Use display_id for color consistency
 
+        label = f"Person: {display_id}"  # 🆕 Always show Person ID
+        if suspicious_category != "normal":
+            label += f" | {suspicious_category}"  # 🆕 Add suspicion tag if any
+
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
-        cv2.putText(frame, f"Person: {display_id}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.9, color, 2)
-    
+        cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
+
     # Display and save frame
     cv2.imshow('Video Tracking', frame)
     cap_out.write(frame)
