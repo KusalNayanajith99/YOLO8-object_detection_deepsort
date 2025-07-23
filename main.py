@@ -7,6 +7,7 @@ import torch
 from tracker import Tracker
 from feature_extractor import OSNetExtractor
 from database import DatabaseManager
+from enhancement import enhance_frame_clahe
 
 
 # --- Configuration ---
@@ -47,8 +48,11 @@ local_to_global_id_map = {}  # Maps local track_id to global_id
 
 # --- Main Loop ---
 while ret:
-    # 1. Detection
-    results = model(frame)
+    # 1. Enhance the frame before detection
+    enhanced_frame = enhance_frame_clahe(frame)
+
+    # 2. Detection
+    results = model(enhanced_frame)
     detections = []
     for result in results:
         for r in result.boxes.data.tolist():
@@ -56,10 +60,10 @@ while ret:
             if int(class_id) == 0 and score > DETECTION_THRESHOLD:
                 detections.append([x1, y1, x2, y2, score])
     
-    # 2. Tracking (with OSNet feature extraction inside)
-    tracker.update(frame, detections)
+    # 3. Tracking (with OSNet feature extraction inside)
+    tracker.update(enhanced_frame, detections)
 
-    # 3. Database Matching and Profile Update
+    # 4. Database Matching and Profile Update
     for track in tracker.tracks:
         local_id = track.track_id
         feature = track.feature
@@ -81,13 +85,13 @@ while ret:
         x1, y1, x2, y2 = map(int, bbox)
         color = colors[display_id % len(colors)] # Use display_id for color consistency
 
-        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
-        cv2.putText(frame, f"Person: {display_id}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX,
+        cv2.rectangle(enhanced_frame, (x1, y1), (x2, y2), color, 3)
+        cv2.putText(enhanced_frame, f"Person: {display_id}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX,
                     0.9, color, 2)
     
     # Display and save frame
-    cv2.imshow('Video Tracking', frame)
-    cap_out.write(frame)
+    cv2.imshow('Video Tracking', enhanced_frame)
+    cap_out.write(enhanced_frame)
     ret, frame = cap.read()
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
