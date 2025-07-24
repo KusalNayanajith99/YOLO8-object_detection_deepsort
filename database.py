@@ -19,18 +19,22 @@ class DatabaseManager:
             cache[str(doc["_id"])] = np.array(doc["feature_gallery"])
         print(f"Loaded {len(cache)} profiles into feature cache.")
         return cache
-    
+
     def match_or_create_person(self, new_feature, camera_id, bbox):
         """
         Tries to match a feature vector to an existing person.
         If no match is found, creates a new person profile.
         Returns the global ID of the person.
         """
-        new_feature_np = new_feature.reshape(1, -1)
+        # Ensure new_feature is a numpy array for further processing
+        if isinstance(new_feature, list):
+            new_feature_np = np.array(new_feature).reshape(1, -1)
+        else:
+            new_feature_np = new_feature.reshape(1, -1)
         best_match_id = None
         max_similarity = -1
 
-        if not self.feature_cache: # Handle case where cache is empty
+        if not self.feature_cache:
             return self.create_new_person(new_feature, camera_id, bbox)
 
         # Search for the best match in the cache
@@ -40,21 +44,21 @@ class DatabaseManager:
                 max_similarity = similarity
                 best_match_id = global_id
 
-        # Decision: Match or Create New
+        # Decision: Match or create
         if max_similarity > self.similarity_threshold:
-            # Matched an existing person
             global_id = best_match_id
             self.update_person(global_id, new_feature, camera_id, bbox)
         else:
-            # No suitable match found, create a new person
             global_id = self.create_new_person(new_feature, camera_id, bbox)
 
         return global_id
-    
+
     def create_new_person(self, feature, camera_id, bbox):
         """Creates a new document for a new person."""
+        if isinstance(feature, list):
+            feature = np.array(feature)
         person_doc = {
-            "source_id": None, # Can be updated later (e.g., employee ID)
+            "source_id": None,
             "status": "active",
             "first_seen_timestamp": datetime.utcnow(),
             "last_seen_timestamp": datetime.utcnow(),
@@ -68,13 +72,15 @@ class DatabaseManager:
         }
         result = self.collection.insert_one(person_doc)
         global_id = str(result.inserted_id)
-        # Update cache
-        self.feature_cache[global_id] = np.array([feature.tolist()])
+        self.feature_cache[global_id] = np.array([feature])
         print(f"Created new person with global ID: {global_id}")
         return global_id
-    
+
     def update_person(self, global_id, new_feature, camera_id, bbox):
         """Updates an existing person's profile."""
+        # Ensure new_feature is a numpy array
+        if isinstance(new_feature, list):
+            new_feature = np.array(new_feature)
         update_query = {
             "$set": {
                 "last_seen_timestamp": datetime.utcnow(),
@@ -91,7 +97,8 @@ class DatabaseManager:
             }
         }
         self.collection.update_one({"_id": ObjectId(global_id)}, update_query)
-        # Update cache
-        self.feature_cache[global_id] = np.vstack(
-            [self.feature_cache[global_id], new_feature]
-        )
+        # Update feature cache accordingly
+        if global_id in self.feature_cache:
+            self.feature_cache[global_id] = np.vstack([self.feature_cache[global_id], new_feature])
+        else:
+            self.feature_cache[global_id] = np.array([new_feature])

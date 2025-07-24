@@ -24,7 +24,14 @@ print(f"Using device: {device}")
 
 db_manager = DatabaseManager(mongo_uri=MONGO_URI)
 feature_extractor = OSNetExtractor(model_name='osnet_x1_0', device=device)
-tracker = Tracker(feature_extractor=feature_extractor)
+# Occlusion-aware tracker with longer persistence & relinking
+tracker = Tracker(
+    feature_extractor=feature_extractor,
+    max_age=40,         # tolerate ~1.3 s loss @30 FPS
+    max_lost=120,       # keep lost tracks ~4 s for relinking
+    iou_thr=0.35,
+    feat_thr=0.35
+)
 model = YOLO("yolov8n.pt")
 
 # Video I/O
