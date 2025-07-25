@@ -3,12 +3,14 @@ import random
 import cv2
 from ultralytics import YOLO
 import torch
+import time
 
 from tracker import Tracker
 from feature_extractor import OSNetExtractor
 from database import DatabaseManager
 from suspicion_detector import SuspicionDetector
-
+from email_alert import send_email_alert
+from collections import defaultdict
 
 # --- Configuration ---
 CAMERA_ID = "Camera_A" # Unique ID for this camera stream
@@ -17,6 +19,10 @@ MONGO_URI = "mongodb+srv://dulaniruwanthika99:zxEA6iEfqb8xKCnb@cluster-cctv.cbpi
 VIDEO_PATH = os.path.join('.', 'data', 'people.mp4')
 VIDEO_OUT_PATH = os.path.join('.', 'out.mp4')
 DETECTION_THRESHOLD = 0.5
+# Email recipients
+EMAIL_RECIPIENTS = ["dulaniruwanthika99@gmail.com"]  ### EMAIL ALERT FEATURE
+# Keep track of last alert time per person + behavior
+last_email_sent = defaultdict(lambda: 0)  # {(person_id, category): timestamp}
 
 # --- Initialization ---
 # Initialize all components
@@ -47,6 +53,9 @@ next_display_id = 1
 # For visualization
 colors = [(random.randint(0, 255), random.randint(0, 255), random.randint(0, 255)) for _ in range(20)]
 local_to_global_id_map = {}  # Maps local track_id to global_id
+
+# Create screenshots folder if it doesn't exist
+os.makedirs("screenshots", exist_ok=True)  ### EMAIL ALERT FEATURE
 
 # --- Main Loop ---
 while ret:
@@ -108,6 +117,37 @@ while ret:
         label = f"Person: {display_id}"  # 🆕 Always show Person ID
         if suspicious_category != "normal":
             label += f" | {suspicious_category}"  # 🆕 Add suspicion tag if any
+
+            current_time = time.time()
+            cooldown_key = (display_id, suspicious_category)
+            time_since_last_alert = current_time - last_email_sent[cooldown_key]
+
+            if time_since_last_alert > 600:  # 600 seconds = 10 minutes
+                # 🆕 Make a copy of the frame with bounding box and label
+                alert_frame = frame.copy()
+                cv2.rectangle(alert_frame, (x1, y1), (x2, y2), color, 3)
+                cv2.putText(alert_frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
+            
+                # 🆕 Save the alert frame with bounding box
+                screenshot_filename = f"screenshot_{display_id}_{int(current_time)}.png"
+                screenshot_path = os.path.join("screenshots", screenshot_filename)
+                cv2.imwrite(screenshot_path, alert_frame)
+
+                # 🆕 Send email alert
+                send_email_alert(
+                    suspicious_category=suspicious_category,
+                    person_id=display_id,
+                    camera_id=CAMERA_ID,
+                    screenshot_path=screenshot_path,
+                    to_emails=EMAIL_RECIPIENTS
+                )
+
+                # 🆕 Update the last sent time
+                last_email_sent[cooldown_key] = current_time
+
+            # 🆕 Draw box and label for suspicious person
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
+            cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
 
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
         cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
