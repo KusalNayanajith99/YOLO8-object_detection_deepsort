@@ -114,9 +114,18 @@ while ret:
         x1, y1, x2, y2 = map(int, bbox)
         color = colors[display_id % len(colors)] # Use display_id for color consistency
 
+        # --- 🆕 Dynamic font scale based on box height ---
+        bbox_height = y2 - y1
+        font_scale = max(0.4, min(1.0, bbox_height / 100))  # scale between 0.4 and 1.0
+        thickness = max(1, int(font_scale * 2))
+
         label = f"Person: {display_id}"  # 🆕 Always show Person ID
+        
         if suspicious_category != "normal":
             label += f" | {suspicious_category}"  # 🆕 Add suspicion tag if any
+
+            # Now get size of text box (after label is defined and with correct font constant)
+            (text_w, text_h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
 
             current_time = time.time()
             cooldown_key = (display_id, suspicious_category)
