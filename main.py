@@ -7,6 +7,7 @@ import torch
 from tracker import Tracker
 from feature_extractor import OSNetExtractor
 from database import DatabaseManager
+from enhancer import enhance_frame_clahe, enhance_frame_gamma
 
 
 # --- Configuration ---
@@ -47,8 +48,12 @@ local_to_global_id_map = {}  # Maps local track_id to global_id
 
 # --- Main Loop ---
 while ret:
+    # 0. Enhancement
+    enhanced_frame = enhance_frame_clahe(frame)
+    # enhanced_frame = enhance_frame_gamma(enhanced_frame, gamma=1.5)  # Apply gamma correction after CLAHE
+
     # 1. Detection
-    results = model(frame)
+    results = model(enhanced_frame)
     detections = []
     for result in results:
         for r in result.boxes.data.tolist():
@@ -57,7 +62,7 @@ while ret:
                 detections.append([x1, y1, x2, y2, score])
     
     # 2. Tracking (with OSNet feature extraction inside)
-    tracker.update(frame, detections)
+    tracker.update(enhanced_frame, detections)
 
     # 3. Database Matching and Profile Update
     for track in tracker.tracks:
@@ -81,13 +86,13 @@ while ret:
         x1, y1, x2, y2 = map(int, bbox)
         color = colors[display_id % len(colors)] # Use display_id for color consistency
 
-        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
-        cv2.putText(frame, f"Person: {display_id}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX,
+        cv2.rectangle(enhanced_frame, (x1, y1), (x2, y2), color, 3)
+        cv2.putText(enhanced_frame, f"Person: {display_id}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX,
                     0.9, color, 2)
     
     # Display and save frame
-    cv2.imshow('Video Tracking', frame)
-    cap_out.write(frame)
+    cv2.imshow('Video Tracking', enhanced_frame)
+    cap_out.write(enhanced_frame)
     ret, frame = cap.read()
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
