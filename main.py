@@ -24,7 +24,7 @@ print(f"Using device: {device}")
 db_manager = DatabaseManager(mongo_uri=MONGO_URI)
 feature_extractor = OSNetExtractor(model_name='osnet_x1_0', device=device)
 tracker = Tracker(feature_extractor=feature_extractor)
-model = YOLO("yolov8n.pt")
+model = YOLO("yolov8l.pt")
 
 # Video I/O
 cap = cv2.VideoCapture(VIDEO_PATH)
