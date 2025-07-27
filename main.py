@@ -11,6 +11,7 @@ from database import DatabaseManager
 from suspicion_detector import SuspicionDetector
 from email_alert import send_email_alert
 from collections import defaultdict
+from walking_deviation_detector import WalkingDeviationDetector
 
 # --- Configuration ---
 CAMERA_ID = "Camera_A" # Unique ID for this camera stream
@@ -34,6 +35,8 @@ feature_extractor = OSNetExtractor(model_name='osnet_x1_0', device=device)
 tracker = Tracker(feature_extractor=feature_extractor)
 model = YOLO("yolov8n.pt")
 suspicion_detector = SuspicionDetector("suspicious_detector.pt")
+pose_model = YOLO("yolov8n-pose.pt")  # NEW: Pose detection model
+walking_detector = WalkingDeviationDetector() 
 
 # Video I/O
 cap = cv2.VideoCapture(VIDEO_PATH)
@@ -71,6 +74,63 @@ while ret:
     # 2. Tracking (with OSNet feature extraction inside)
     tracker.update(frame, detections)
 
+    # --- NEW: Pose detection and walking deviation analysis ---
+    pose_results = pose_model(frame)
+    walking_deviations = {}  # Maps global_id to walking deviation status
+    
+    if pose_results and pose_results[0].keypoints is not None:
+        for i, pose_result in enumerate(pose_results):
+            if pose_result.boxes is not None and pose_result.keypoints is not None:
+                for j, pose_box in enumerate(pose_result.boxes.data.tolist()):
+                    pose_x1, pose_y1, pose_x2, pose_y2, pose_score, pose_class_id = pose_box
+                    
+                    if int(pose_class_id) == 0 and pose_score > DETECTION_THRESHOLD:
+                        # Get keypoints for this detection
+                        if j < len(pose_result.keypoints.data):
+                            keypoints = pose_result.keypoints.data[j].cpu().numpy()
+                            
+                            # Match pose detection to tracked person
+                            best_match_track = None
+                            best_overlap = 0
+                            
+                            for track in tracker.tracks:
+                                tbx1, tby1, tbx2, tby2 = map(int, track.bbox)
+                                
+                                # Calculate intersection area
+                                inter_x1 = max(pose_x1, tbx1)
+                                inter_y1 = max(pose_y1, tby1)
+                                inter_x2 = min(pose_x2, tbx2)
+                                inter_y2 = min(pose_y2, tby2)
+                                
+                                if inter_x2 > inter_x1 and inter_y2 > inter_y1:
+                                    intersection = (inter_x2 - inter_x1) * (inter_y2 - inter_y1)
+                                    pose_area = (pose_x2 - pose_x1) * (pose_y2 - pose_y1)
+                                    track_area = (tbx2 - tbx1) * (tby2 - tby1)
+                                    
+                                    # Calculate IoU
+                                    union = pose_area + track_area - intersection
+                                    if union > 0:
+                                        overlap = intersection / union
+                                        if overlap > best_overlap:
+                                            best_overlap = overlap
+                                            best_match_track = track
+                            
+                            # If we found a good match, analyze walking pattern
+                            if best_match_track is not None and best_overlap > 0.3:
+                                local_id = best_match_track.track_id
+                                feature = best_match_track.feature
+                                
+                                # Get or create global ID
+                                global_id = db_manager.match_or_create_person(feature, CAMERA_ID, best_match_track.bbox)
+                                
+                                # Extract pose features and analyze walking pattern
+                                pose_features = walking_detector.extract_pose_features(keypoints)
+                                is_deviation, deviation_category = walking_detector.analyze_gait_pattern(global_id, pose_features)
+                                
+                                if is_deviation:
+                                    walking_deviations[global_id] = "walking_deviation"
+                                    print(f"Walking deviation detected for person {global_id}")
+
     # --- NEW: Run suspicious activity detection ---
     suspicion_map = {}  # 🆕 Maps global_id to suspicious_category
     suspicion_results = suspicion_detector.model(frame)[0]
@@ -85,6 +145,11 @@ while ret:
                 feature = track.feature
                 global_id = db_manager.match_or_create_person(feature, CAMERA_ID, track.bbox, suspicious_category=label)
                 suspicion_map[global_id] = label
+
+    # --- Combine suspicion results with walking deviation results ---
+    for global_id, deviation in walking_deviations.items():
+        if global_id not in suspicion_map:
+            suspicion_map[global_id] = deviation
 
     # 3. Database Matching and Profile Update
     for track in tracker.tracks:
@@ -120,28 +185,29 @@ while ret:
         thickness = max(1, int(font_scale * 2))
 
         label = f"Person: {display_id}"  # 🆕 Always show Person ID
-        
         if suspicious_category != "normal":
             label += f" | {suspicious_category}"  # 🆕 Add suspicion tag if any
-
-            # Now get size of text box (after label is defined and with correct font constant)
-            (text_w, text_h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
-
+        
+        # Now get size of text box (after label is defined and with correct font constant)
+        (text_w, text_h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+        
+        # Email alert logic
+        if suspicious_category != "normal":
             current_time = time.time()
             cooldown_key = (display_id, suspicious_category)
             time_since_last_alert = current_time - last_email_sent[cooldown_key]
-
+            
             if time_since_last_alert > 600:  # 600 seconds = 10 minutes
                 # 🆕 Make a copy of the frame with bounding box and label
                 alert_frame = frame.copy()
                 cv2.rectangle(alert_frame, (x1, y1), (x2, y2), color, 3)
-                cv2.putText(alert_frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
+                cv2.putText(alert_frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, thickness)
             
                 # 🆕 Save the alert frame with bounding box
                 screenshot_filename = f"screenshot_{display_id}_{int(current_time)}.png"
                 screenshot_path = os.path.join("screenshots", screenshot_filename)
                 cv2.imwrite(screenshot_path, alert_frame)
-
+                
                 # 🆕 Send email alert
                 send_email_alert(
                     suspicious_category=suspicious_category,
@@ -150,16 +216,13 @@ while ret:
                     screenshot_path=screenshot_path,
                     to_emails=EMAIL_RECIPIENTS
                 )
-
+                
                 # 🆕 Update the last sent time
                 last_email_sent[cooldown_key] = current_time
-
-            # 🆕 Draw box and label for suspicious person
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
-            cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
+                print(f"Alert sent for Person {display_id}: {suspicious_category}")
 
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
-        cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
+        cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, thickness)
 
     # Display and save frame
     cv2.imshow('Video Tracking', frame)
