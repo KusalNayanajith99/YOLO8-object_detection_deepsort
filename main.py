@@ -17,7 +17,7 @@ from walking_deviation_detector import WalkingDeviationDetector
 CAMERA_ID = "Camera_A" # Unique ID for this camera stream
 # MONGO_URI = "mongodb+srv://kusal:1234@cluster-cctv.7sultup.mongodb.net/?retryWrites=true&w=majority&appName=Cluster-CCTV" # Your MongoDB connection string
 MONGO_URI = "mongodb+srv://dulaniruwanthika99:zxEA6iEfqb8xKCnb@cluster-cctv.cbpifgp.mongodb.net/?retryWrites=true&w=majority&appName=Cluster-CCTV"
-VIDEO_PATH = os.path.join('.', 'data', 'people.mp4')
+VIDEO_PATH = os.path.join('.', 'data', 'shooting.mp4')
 VIDEO_OUT_PATH = os.path.join('.', 'out.mp4')
 DETECTION_THRESHOLD = 0.5
 # Email recipients
@@ -46,6 +46,14 @@ if not ret:
     exit()
 cap_out = cv2.VideoWriter(VIDEO_OUT_PATH, cv2.VideoWriter_fourcc(*'mp4v'), cap.get(cv2.CAP_PROP_FPS),
                           (frame.shape[1], frame.shape[0]))
+
+# --- Display Configuration ---
+DISPLAY_WIDTH = 1280
+DISPLAY_HEIGHT = 720
+
+# Create named window with fixed size
+cv2.namedWindow('Video Tracking', cv2.WINDOW_NORMAL)
+cv2.resizeWindow('Video Tracking', DISPLAY_WIDTH, DISPLAY_HEIGHT)
 
 # --- NEW: MAPPING FOR DISPLAY IDs ---
 # This dictionary maps the long global_id from DB to a simple display ID
@@ -224,8 +232,10 @@ while ret:
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
         cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, thickness)
 
+    display_frame = cv2.resize(frame, (DISPLAY_WIDTH, DISPLAY_HEIGHT))
+
     # Display and save frame
-    cv2.imshow('Video Tracking', frame)
+    cv2.imshow('Video Tracking', display_frame)
     cap_out.write(frame)
     ret, frame = cap.read()
 
