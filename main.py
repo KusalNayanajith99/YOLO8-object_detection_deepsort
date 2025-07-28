@@ -12,7 +12,7 @@ from database import DatabaseManager
 # --- Configuration ---
 CAMERA_ID = "Camera_A" # Unique ID for this camera stream
 MONGO_URI = "mongodb+srv://kusal:1234@cluster-cctv.7sultup.mongodb.net/?retryWrites=true&w=majority&appName=Cluster-CCTV" # Your MongoDB connection string
-VIDEO_PATH = os.path.join('.', 'data', 'people.mp4')
+VIDEO_PATH = os.path.join('.', 'data', '7.avi')
 VIDEO_OUT_PATH = os.path.join('.', 'out.mp4')
 DETECTION_THRESHOLD = 0.5
 
@@ -24,7 +24,7 @@ print(f"Using device: {device}")
 db_manager = DatabaseManager(mongo_uri=MONGO_URI)
 feature_extractor = OSNetExtractor(model_name='osnet_x1_0', device=device)
 tracker = Tracker(feature_extractor=feature_extractor)
-model = YOLO("yolov8l.pt")
+model = YOLO("yolov8m.pt")
 
 # Video I/O
 cap = cv2.VideoCapture(VIDEO_PATH)
