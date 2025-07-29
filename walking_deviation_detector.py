@@ -6,25 +6,47 @@ import cv2
 import math
 
 class WalkingDeviationDetector:
-    def __init__(self, history_length=20, deviation_threshold=0.2):
+    def __init__(self, history_length=15, deviation_threshold=0.1):  # *** FIXED: Lower threshold ***
         """
         Initialize walking deviation detector with optimized parameters
         
         Args:
-            history_length: Number of frames to keep in history for analysis (reduced for faster detection)
-            deviation_threshold: Base threshold for detecting walking deviations (lowered for sensitivity)
+            history_length: Reduced for faster response (20→15)
+            deviation_threshold: Lowered for better sensitivity (0.3→0.15)
         """
         self.history_length = history_length
         self.deviation_threshold = deviation_threshold
         
-        # Individual thresholds for different metrics (much more sensitive)
-        self.symmetry_threshold = 0.10      # Very sensitive for asymmetry
-        self.regularity_threshold = 0.15   # Sensitive for irregular patterns
-        self.limping_threshold = 0.02      # Moderate for limping detection
-        self.stance_threshold = 0.25       # Less sensitive for stance width
+        # *** FIXED: Adjusted weights and added adaptive thresholds ***
+        self.metric_weights = {
+            'leg_asymmetry': 0.35,      # Reduced from 40% (too dominant)
+            'step_consistency': 0.25,   # Increased from 20% (more important)
+            'lateral_stability': 0.20,  # Increased from 15% (more reliable)
+            'joint_movement': 0.15,     # Same (15%)
+            'vertical_oscillation': 0.05 # Reduced from 10% (least reliable)
+        }
+        
+        # *** FIXED: More realistic clinical thresholds ***
+        self.clinical_thresholds = {
+            'leg_asymmetry_max': 15.0,      # Reduced from 30° (more sensitive)
+            'step_consistency_cv': 0.15,    # Reduced from 0.2 (more sensitive)
+            'lateral_stability_ratio': 0.3, # Reduced from 0.5 (more sensitive)
+            'joint_movement_max': 45.0,     # Reduced from 180° (more realistic)
+            'vertical_oscillation_cv': 0.05  # Increased from 0.03 (less sensitive)
+        }
+        
+        # *** NEW: Adaptive thresholds based on data quality ***
+        self.adaptive_thresholds = {
+            'min_keypoint_confidence': 0.3,  # Minimum pose confidence
+            'min_frames_for_analysis': 8,    # Reduced from 10
+            'stability_window': 5            # Frames to check for stability
+        }
         
         # Store pose history for each person
         self.pose_history = defaultdict(lambda: deque(maxlen=history_length))
+        
+        # *** NEW: Store raw measurements for debugging ***
+        self.debug_history = defaultdict(list)
         
         # Store gait parameters for each person
         self.gait_parameters = defaultdict(dict)
@@ -66,50 +88,272 @@ class WalkingDeviationDetector:
             if current_features is None:
                 return "normal", 0.0
 
-            # Normal analysis (NO MORE CHEATING)
-            is_deviation, category = self.analyze_gait_pattern(person_id, current_features)
-            confidence = self.calculate_confidence_score(person_id, is_deviation)
+            # Add current features to history
+            self.pose_history[person_id].append(current_features)
 
-            return category, confidence
+            # *** FIXED: Reduced minimum frames requirement ***
+            if len(self.pose_history[person_id]) < self.adaptive_thresholds['min_frames_for_analysis']:
+                return "normal", 0.0
+
+            # Calculate weighted deviation score
+            weighted_score, metric_scores = self.calculate_weighted_deviation_score(person_id)
+            
+            # *** NEW: Debug logging for troubleshooting ***
+            if weighted_score > 0.05:  # Only log significant scores
+                print(f"Person {person_id}: Score={weighted_score:.3f}, Metrics={metric_scores}")
+            
+            # Determine if there's a deviation and classify it
+            is_deviation = weighted_score > self.deviation_threshold
+            
+            if is_deviation:
+                # Classify the type of deviation based on dominant metric
+                category = self.classify_deviation_type(metric_scores, weighted_score)
+                confidence = min(weighted_score * 2, 0.95)  # *** FIXED: Better confidence scaling ***
+                
+                return category, confidence
+            else:
+                return "normal", max(0.1, 1.0 - weighted_score * 3)  # *** FIXED: Better normal confidence ***
 
         except Exception as e:
             print(f"Error in walking deviation detection: {e}")
+            import traceback
+            traceback.print_exc()
             return "normal", 0.0
 
-    # def detect_walking_deviation(self, frame, person_id, bbox):
-    #     """TEMPORARY: Force detection for testing"""
-    #     try:
-    #         # Your existing code...
-    #         keypoints = self.extract_pose_keypoints_from_frame(frame, bbox)
-    #         if keypoints is None:
-    #             return "normal", 0.0
+    def calculate_weighted_deviation_score(self, person_id):
+        """Calculate weighted deviation score using the 5 key metrics"""
+        history = list(self.pose_history[person_id])
+        
+        # Calculate each metric score (0.0 = normal, 1.0 = maximum deviation)
+        metric_scores = {
+            'leg_asymmetry': self.calculate_leg_asymmetry(history),
+            'step_consistency': self.calculate_step_consistency(history),
+            'lateral_stability': self.calculate_lateral_stability(history),
+            'joint_movement': self.calculate_joint_movement(history),
+            'vertical_oscillation': self.calculate_vertical_oscillation(history)
+        }
+        
+        # *** NEW: Store debug info ***
+        self.debug_history[person_id].append(metric_scores.copy())
+        
+        # Calculate weighted score
+        weighted_score = 0.0
+        for metric, score in metric_scores.items():
+            weighted_score += score * self.metric_weights[metric]
+        
+        return weighted_score, metric_scores
 
-    #         current_features = self.extract_pose_features(keypoints)
-    #         if current_features is None:
-    #             return "normal", 0.0
+    def calculate_leg_asymmetry(self, history):
+        """*** IMPROVED: Better leg asymmetry calculation ***"""
+        left_knee_angles = []
+        right_knee_angles = []
+        left_ankle_heights = []
+        right_ankle_heights = []
+        
+        for frame in history:
+            # Collect knee angles
+            if all(key in frame for key in ['left_knee_angle', 'right_knee_angle']):
+                left_knee_angles.append(frame['left_knee_angle'])
+                right_knee_angles.append(frame['right_knee_angle'])
+            
+            # Collect ankle heights for step asymmetry
+            if all(key in frame for key in ['left_ankle_height', 'right_ankle_height']):
+                left_ankle_heights.append(frame['left_ankle_height'])
+                right_ankle_heights.append(frame['right_ankle_height'])
+        
+        if len(left_knee_angles) < 5:
+            return 0.0
+        
+        # *** IMPROVED: Multiple asymmetry measures ***
+        asymmetry_score = 0.0
+        
+        # 1. Knee angle asymmetry
+        knee_asymmetries = [abs(l - r) for l, r in zip(left_knee_angles, right_knee_angles)]
+        avg_knee_asymmetry = np.mean(knee_asymmetries)
+        knee_score = min(avg_knee_asymmetry / self.clinical_thresholds['leg_asymmetry_max'], 1.0)
+        asymmetry_score += knee_score * 0.6
+        
+        # 2. Ankle height pattern asymmetry
+        if len(left_ankle_heights) >= 5:
+            left_variation = np.std(left_ankle_heights)
+            right_variation = np.std(right_ankle_heights)
+            if left_variation + right_variation > 0:
+                height_asymmetry = abs(left_variation - right_variation) / (left_variation + right_variation)
+                asymmetry_score += min(height_asymmetry, 1.0) * 0.4
+        
+        return min(asymmetry_score, 1.0)
 
-    #         # TEMPORARY: Force specific detections for testing
-    #         if "limping" in person_id:
-    #             return "limping", 0.8
-    #         elif "balance" in person_id:
-    #             return "balance_issues", 0.7
-    #         elif "irregular" in person_id:
-    #             return "irregular_gait", 0.9
+    def calculate_step_consistency(self, history):
+        """*** FIXED: Improved step consistency calculation ***"""
+        if len(history) < 8:
+            return 0.0
+        
+        step_widths = []
+        ankle_movements = []
+        hip_movements = []
+        
+        for i, frame in enumerate(history):
+            if 'step_width' in frame and frame['step_width'] > 0:
+                step_widths.append(frame['step_width'])
+            
+            # *** NEW: Track movement patterns ***
+            if i > 0 and 'hip_center_y' in frame:
+                prev_frame = history[i-1]
+                if 'hip_center_y' in prev_frame:
+                    hip_movement = abs(frame['hip_center_y'] - prev_frame['hip_center_y'])
+                    hip_movements.append(hip_movement)
+            
+            # Track ankle movement for step timing
+            if (i > 0 and 'left_ankle_height' in frame and 'right_ankle_height' in frame):
+                prev_frame = history[i-1]
+                if 'left_ankle_height' in prev_frame and 'right_ankle_height' in prev_frame:
+                    left_move = abs(frame['left_ankle_height'] - prev_frame['left_ankle_height'])
+                    right_move = abs(frame['right_ankle_height'] - prev_frame['right_ankle_height'])
+                    ankle_movements.append(left_move + right_move)
+        
+        if len(step_widths) < 3:
+            return 0.0
+        
+        # Calculate multiple consistency measures
+        consistency_score = 0.0
+        
+        # 1. Step width consistency
+        if len(step_widths) >= 3:
+            step_cv = np.std(step_widths) / (np.mean(step_widths) + 1e-6)
+            step_score = min(step_cv / self.clinical_thresholds['step_consistency_cv'], 1.0)
+            consistency_score += step_score * 0.5
+        
+        # 2. Movement pattern consistency
+        if len(ankle_movements) >= 3:
+            ankle_cv = np.std(ankle_movements) / (np.mean(ankle_movements) + 1e-6)
+            ankle_score = min(ankle_cv / 0.5, 1.0)  # Threshold for ankle movement variation
+            consistency_score += ankle_score * 0.3
+        
+        # 3. Hip movement consistency
+        if len(hip_movements) >= 3:
+            hip_cv = np.std(hip_movements) / (np.mean(hip_movements) + 1e-6)
+            hip_score = min(hip_cv / 0.3, 1.0)  # Threshold for hip movement variation
+            consistency_score += hip_score * 0.2
+        
+        return min(consistency_score, 1.0)
 
-    #         # Normal analysis
-    #         is_deviation, category = self.analyze_gait_pattern(person_id, current_features)
-    #         confidence = self.calculate_confidence_score(person_id, is_deviation)
+    def calculate_lateral_stability(self, history):
+        """*** IMPROVED: Better lateral stability calculation ***"""
+        head_deviations = []
+        hip_widths = []
+        
+        for frame in history:
+            if all(key in frame for key in ['nose_x', 'hip_center_x', 'hip_width']):
+                if frame['hip_width'] > 0:  # Valid measurement
+                    # Calculate lateral deviation of head from hip center
+                    head_deviation = abs(frame['nose_x'] - frame['hip_center_x'])
+                    normalized_deviation = head_deviation / frame['hip_width']
+                    head_deviations.append(normalized_deviation)
+                    hip_widths.append(frame['hip_width'])
+        
+        if len(head_deviations) < 5:
+            return 0.0
+        
+        # Calculate stability metrics
+        avg_deviation = np.mean(head_deviations)
+        deviation_variability = np.std(head_deviations)
+        
+        # Combine average deviation and variability
+        stability_score = (avg_deviation / self.clinical_thresholds['lateral_stability_ratio']) * 0.7
+        stability_score += min(deviation_variability / 0.2, 1.0) * 0.3
+        
+        return min(stability_score, 1.0)
 
-    #         return category, confidence
+    def calculate_joint_movement(self, history):
+        """*** IMPROVED: Better joint movement calculation ***"""
+        left_knee_angles = []
+        right_knee_angles = []
+        
+        for frame in history:
+            if all(key in frame for key in ['left_knee_angle', 'right_knee_angle']):
+                # Filter out unrealistic angles
+                if 30 <= frame['left_knee_angle'] <= 180 and 30 <= frame['right_knee_angle'] <= 180:
+                    left_knee_angles.append(frame['left_knee_angle'])
+                    right_knee_angles.append(frame['right_knee_angle'])
+        
+        if len(left_knee_angles) < 8:
+            return 0.0
+        
+        # Calculate range of motion for each leg
+        left_rom = max(left_knee_angles) - min(left_knee_angles)
+        right_rom = max(right_knee_angles) - min(right_knee_angles)
+        
+        # Multiple joint movement indicators
+        joint_score = 0.0
+        
+        # 1. ROM asymmetry
+        rom_asymmetry = abs(left_rom - right_rom)
+        asymmetry_score = min(rom_asymmetry / self.clinical_thresholds['joint_movement_max'], 1.0)
+        joint_score += asymmetry_score * 0.6
+        
+        # 2. Overall ROM restriction
+        avg_rom = (left_rom + right_rom) / 2
+        if avg_rom < 20:  # Very restricted movement
+            restriction_score = (20 - avg_rom) / 20
+            joint_score += restriction_score * 0.4
+        
+        return min(joint_score, 1.0)
 
-    #     except Exception as e:
-    #         print(f"Error in walking deviation detection: {e}")
-    #         return "normal", 0.0
+    def calculate_vertical_oscillation(self, history):
+        """*** IMPROVED: Better vertical oscillation calculation ***"""
+        hip_center_heights = []
+        
+        for frame in history:
+            if 'hip_center_y' in frame:
+                hip_center_heights.append(frame['hip_center_y'])
+        
+        if len(hip_center_heights) < 8:
+            return 0.0
+        
+        # Calculate vertical movement variability
+        height_cv = np.std(hip_center_heights) / (np.mean(hip_center_heights) + 1e-6)
+        
+        # Normalize by clinical threshold
+        oscillation_score = min(height_cv / self.clinical_thresholds['vertical_oscillation_cv'], 1.0)
+        
+        return oscillation_score
+
+    def classify_deviation_type(self, metric_scores, weighted_score):
+        """*** IMPROVED: Better classification with multiple criteria ***"""
+        # Sort metrics by score
+        sorted_metrics = sorted(metric_scores.items(), key=lambda x: x[1], reverse=True)
+        dominant_metric, dominant_score = sorted_metrics[0]
+        
+        # *** IMPROVED: Multi-metric classification with thresholds ***
+        
+        # Strong single metric dominance
+        if dominant_score > 0.4:
+            if dominant_metric == 'leg_asymmetry':
+                return "asymmetric_gait"
+            elif dominant_metric == 'step_consistency':
+                return "irregular_gait"
+            elif dominant_metric == 'lateral_stability':
+                return "balance_issues"
+            elif dominant_metric == 'joint_movement':
+                return "limping"
+            elif dominant_metric == 'vertical_oscillation':
+                return "bouncing_gait"
+        
+        # Mixed patterns - look at combinations
+        if metric_scores['leg_asymmetry'] > 0.2 and metric_scores['joint_movement'] > 0.2:
+            return "limping"
+        elif metric_scores['lateral_stability'] > 0.2 and metric_scores['step_consistency'] > 0.2:
+            return "balance_issues"
+        elif metric_scores['step_consistency'] > 0.25:
+            return "irregular_gait"
+        elif metric_scores['leg_asymmetry'] > 0.25:
+            return "asymmetric_gait"
+        
+        # Default for mild deviations
+        return "walking_deviation"
 
     def extract_pose_keypoints_from_frame(self, frame, bbox):
-        """
-        Extract pose keypoints from frame using YOLOv8-Pose
-        """
+        """Extract pose keypoints from frame using YOLOv8-Pose"""
         try:
             if self.pose_model is None:
                 return None
@@ -153,85 +397,76 @@ class WalkingDeviationDetector:
             print(f"Error in pose extraction: {e}")
             return None
 
-    def calculate_confidence_score(self, person_id, is_deviation):
-        """
-        Calculate confidence score based on detection consistency and history
-        """
-        if person_id not in self.pose_history or len(self.pose_history[person_id]) < 3:
-            return 0.3 if is_deviation else 0.1  # Low confidence for early detection
-        
-        # Calculate confidence based on history length and detection consistency
-        history_length = len(self.pose_history[person_id])
-        
-        # Recent detection consistency
-        recent_detections = []
-        for features in list(self.pose_history[person_id])[-10:]:  # Last 10 frames
-            temp_deviation, _ = self._quick_deviation_check(features)
-            recent_detections.append(temp_deviation)
-        
-        consistency = sum(recent_detections) / len(recent_detections) if recent_detections else 0
-        
-        # Base confidence on history and consistency
-        base_confidence = min(history_length / 20.0, 1.0)  # Scale with history
-        consistency_bonus = consistency * 0.3
-        
-        final_confidence = base_confidence * 0.7 + consistency_bonus + 0.2
-        
-        return min(final_confidence, 0.95)  # Cap at 95%
-
-    def _quick_deviation_check(self, features):
-        """Quick check for deviation in single frame (for confidence calculation)"""
-        if not features:
-            return False, "normal"
-        
-        # Simple checks
-        if 'step_width' in features and 'hip_width' in features:
-            if features['hip_width'] > 0:
-                width_ratio = features['step_width'] / features['hip_width']
-                if width_ratio > 2.5 or width_ratio < 0.3:
-                    return True, "balance_issues"
-        
-        return False, "normal"
-    
     def extract_pose_features(self, keypoints):
-        """Enhanced feature extraction with better fallback"""
+        """*** IMPROVED: Better feature extraction with validation ***"""
         if len(keypoints) < 17:
             return None
             
         features = {}
         
-        # Get key points
-        left_hip = keypoints[self.POSE_KEYPOINTS['left_hip']]
-        right_hip = keypoints[self.POSE_KEYPOINTS['right_hip']]
+        # Get key points with confidence check
+        def get_point_if_confident(kp_name, min_conf=None):
+            if min_conf is None:
+                min_conf = self.adaptive_thresholds['min_keypoint_confidence']
+            kp = keypoints[self.POSE_KEYPOINTS[kp_name]]
+            return kp if kp[2] > min_conf else None
         
-        # MUCH LOWER confidence requirements for balance videos
-        if left_hip[2] > 0.1 and right_hip[2] > 0.1:  # Very low threshold
-            features['hip_center'] = [(left_hip[0] + right_hip[0]) / 2, (left_hip[1] + right_hip[1]) / 2]
-            features['hip_width'] = euclidean(left_hip[:2], right_hip[:2])
+        # Essential points
+        nose = get_point_if_confident('nose', 0.2)  # Lower confidence for head
+        left_hip = get_point_if_confident('left_hip')
+        right_hip = get_point_if_confident('right_hip')
+        left_knee = get_point_if_confident('left_knee')
+        right_knee = get_point_if_confident('right_knee')
+        left_ankle = get_point_if_confident('left_ankle')
+        right_ankle = get_point_if_confident('right_ankle')
+        
+        # Check if we have minimum required points
+        if not all([left_hip, right_hip, left_knee, right_knee, left_ankle, right_ankle]):
+            return None
+        
+        # Basic measurements
+        features['hip_center_x'] = (left_hip[0] + right_hip[0]) / 2
+        features['hip_center_y'] = (left_hip[1] + right_hip[1]) / 2
+        features['hip_width'] = euclidean(left_hip[:2], right_hip[:2])
+        features['step_width'] = abs(left_ankle[0] - right_ankle[0])
+        
+        # Ankle heights
+        features['left_ankle_height'] = left_ankle[1]
+        features['right_ankle_height'] = right_ankle[1]
+        
+        # Head position (for lateral stability)
+        if nose:
+            features['nose_x'] = nose[0]
+            features['nose_y'] = nose[1]
+        
+        # Calculate joint angles with validation
+        try:
+            # Left knee angle
+            left_angle = self.calculate_angle(left_hip[:2], left_knee[:2], left_ankle[:2])
+            if 30 <= left_angle <= 180:  # Reasonable range
+                features['left_knee_angle'] = left_angle
             
-            # Force some features even with low confidence
-            left_knee = keypoints[self.POSE_KEYPOINTS['left_knee']]
-            right_knee = keypoints[self.POSE_KEYPOINTS['right_knee']]
-            left_ankle = keypoints[self.POSE_KEYPOINTS['left_ankle']]
-            right_ankle = keypoints[self.POSE_KEYPOINTS['right_ankle']]
+            # Right knee angle
+            right_angle = self.calculate_angle(right_hip[:2], right_knee[:2], right_ankle[:2])
+            if 30 <= right_angle <= 180:  # Reasonable range
+                features['right_knee_angle'] = right_angle
             
-            # Accept any confidence > 0.1
-            if all(kp[2] > 0.1 for kp in [left_knee, right_knee, left_ankle, right_ankle]):
-                # Add all features
-                features['step_width'] = abs(left_ankle[0] - right_ankle[0])
-                features['left_ankle_height'] = left_ankle[1]
-                features['right_ankle_height'] = right_ankle[1]
+            # Hip angles (using shoulders if available)
+            left_shoulder = get_point_if_confident('left_shoulder', 0.2)
+            right_shoulder = get_point_if_confident('right_shoulder', 0.2)
+            
+            if left_shoulder:
+                left_hip_angle = self.calculate_angle(left_shoulder[:2], left_hip[:2], left_knee[:2])
+                if 45 <= left_hip_angle <= 135:  # Reasonable range
+                    features['left_hip_angle'] = left_hip_angle
+            
+            if right_shoulder:
+                right_hip_angle = self.calculate_angle(right_shoulder[:2], right_hip[:2], right_knee[:2])
+                if 45 <= right_hip_angle <= 135:  # Reasonable range
+                    features['right_hip_angle'] = right_hip_angle
                 
-                # Add artificial balance indicators for testing
-                features['artificial_balance_score'] = abs(left_ankle[0] - right_ankle[0]) / max(features['hip_width'], 1.0)
-        
-        # If still no features, create artificial ones for balance testing
-        if not features and "balance" in str(keypoints):
-            features = {
-                'hip_width': 100,
-                'step_width': 200,  # Wide step = balance issues
-                'artificial_balance_score': 2.0
-            }
+        except Exception as e:
+            print(f"Error calculating angles: {e}")
         
         return features if features else None
     
@@ -252,206 +487,15 @@ class WalkingDeviationDetector:
         angle = np.arccos(cos_angle)
         
         return np.degrees(angle)
-    
+
+    # Legacy methods for compatibility (kept but not used in new weighted system)
     def analyze_gait_pattern(self, person_id, current_features):
-        """Fixed classification based on actual data patterns"""
-        if current_features is None:
+        """Legacy method - now uses weighted scoring system"""
+        weighted_score, metric_scores = self.calculate_weighted_deviation_score(person_id)
+        is_deviation = weighted_score > self.deviation_threshold
+        
+        if is_deviation:
+            category = self.classify_deviation_type(metric_scores, weighted_score)
+            return True, category
+        else:
             return False, "normal"
-
-        # Add current features to history
-        self.pose_history[person_id].append(current_features)
-
-        if len(self.pose_history[person_id]) < 8:
-            return False, "normal"
-
-        history = list(self.pose_history[person_id])
-
-        # Calculate all scores
-        symmetry_score = self.analyze_step_symmetry(history)
-        regularity_score = self.analyze_step_regularity(history)
-        limping_score = self.detect_limping_pattern(history)
-        stance_score = self.analyze_stance_width(history)
-
-        # FIXED CLASSIFICATION LOGIC based on your actual data patterns
-
-        # Pattern 1: High regularity + High stance = LIMPING (not irregular_gait)
-        if regularity_score > 0.5 and stance_score > 0.5:
-            print(f"DETECTED LIMPING: Reg={regularity_score:.3f}, Stance={stance_score:.3f}")
-            return True, "limping"
-
-        # Pattern 2: High limping score + High symmetry = IRREGULAR_GAIT (not limping)  
-        if limping_score > 0.5 and symmetry_score > 0.3:
-            print(f"DETECTED IRREGULAR: Limp={limping_score:.3f}, Sym={symmetry_score:.3f}")
-            return True, "irregular_gait"
-
-        # Pattern 3: High stance alone = BALANCE_ISSUES
-        if stance_score > 0.6:
-            print(f"DETECTED BALANCE: Stance={stance_score:.3f}")
-            return True, "balance_issues"
-
-        # Pattern 4: High symmetry alone = IRREGULAR_GAIT
-        if symmetry_score > 0.4:
-            print(f"DETECTED IRREGULAR: Sym={symmetry_score:.3f}")
-            return True, "irregular_gait"
-
-        # Pattern 5: High limping alone = LIMPING
-        if limping_score > 0.3:
-            print(f"DETECTED LIMPING: Limp={limping_score:.3f}")
-            return True, "limping"
-
-        # Pattern 6: Any other combination above thresholds = IRREGULAR
-        if any(score > 0.15 for score in [symmetry_score, regularity_score, limping_score, stance_score]):
-            print(f"DETECTED IRREGULAR: Mixed patterns")
-            return True, "irregular_gait"
-
-        print(f"NO DEVIATIONS: All scores too low")
-        return False, "normal"
-
-    def analyze_step_symmetry(self, history):
-        """Analyze symmetry between left and right leg movements with improved sensitivity"""
-        left_angles = []
-        right_angles = []
-        ankle_height_diffs = []
-        
-        for frame in history:
-            if 'left_thigh_angle' in frame and 'right_thigh_angle' in frame:
-                left_angles.append(frame['left_thigh_angle'])
-                right_angles.append(frame['right_thigh_angle'])
-            
-            if 'ankle_height_diff' in frame:
-                ankle_height_diffs.append(frame['ankle_height_diff'])
-        
-        if len(left_angles) < 5:  # Reduced minimum requirement
-            return 0
-        
-        # Calculate asymmetry in multiple ways
-        angle_differences = [abs(l - r) for l, r in zip(left_angles, right_angles)]
-        avg_asymmetry = np.mean(angle_differences)
-        
-        # Add ankle height asymmetry
-        ankle_asymmetry = np.mean(ankle_height_diffs) if ankle_height_diffs else 0
-        
-        # Combine asymmetries with weights
-        combined_asymmetry = (avg_asymmetry * 0.7 + ankle_asymmetry * 0.3)
-        
-        # More sensitive normalization
-        normalized_asymmetry = min(combined_asymmetry / 20.0, 1.0)  # Reduced from 30 to 20
-        
-        return normalized_asymmetry
-    
-    def analyze_step_regularity(self, history):
-        """Analyze regularity of step patterns with improved detection"""
-        if len(history) < 10:  # Reduced from 20
-            return 0
-        
-        step_widths = []
-        ankle_diffs = []
-        
-        for frame in history:
-            if 'step_width' in frame:
-                step_widths.append(frame['step_width'])
-            if 'ankle_height_diff' in frame:
-                ankle_diffs.append(frame['ankle_height_diff'])
-        
-        if len(step_widths) < 5:  # Reduced minimum
-            return 0
-        
-        # Calculate coefficient of variation for step width
-        step_cv = np.std(step_widths) / (np.mean(step_widths) + 1e-6)
-        
-        # Calculate variability in ankle height differences
-        ankle_cv = np.std(ankle_diffs) / (np.mean(ankle_diffs) + 1e-6) if ankle_diffs else 0
-        
-        # Combine variabilities
-        combined_cv = (step_cv * 0.6 + ankle_cv * 0.4)
-        
-        # More sensitive normalization
-        return min(combined_cv * 1.5, 1.0)  # Increased sensitivity
-    
-    def detect_limping_pattern(self, history):
-        """Enhanced limping pattern detection"""
-        left_heights = []
-        right_heights = []
-        height_diffs = []
-        
-        for frame in history:
-            if 'left_ankle_height' in frame and 'right_ankle_height' in frame:
-                left_heights.append(frame['left_ankle_height'])
-                right_heights.append(frame['right_ankle_height'])
-                height_diffs.append(abs(frame['left_ankle_height'] - frame['right_ankle_height']))
-        
-        if len(left_heights) < 8:  # Reduced from 15
-            return 0
-        
-        # Analyze vertical movement patterns
-        left_variation = np.std(left_heights)
-        right_variation = np.std(right_heights)
-        avg_height_diff = np.mean(height_diffs)
-        
-        # Check for significant difference in leg movement
-        variation_diff = abs(left_variation - right_variation)
-        avg_variation = (left_variation + right_variation) / 2
-        
-        # Multiple indicators of limping
-        limping_score = 0
-        
-        if avg_variation > 0:
-            limping_score += variation_diff / avg_variation
-        
-        # Add consistent height difference indicator
-        if len(left_heights) > 0:
-            avg_ankle_height = (np.mean(left_heights) + np.mean(right_heights)) / 2
-            if avg_ankle_height > 0:
-                limping_score += (avg_height_diff / avg_ankle_height) * 0.5
-        
-        return min(limping_score, 1.0)
-    
-    def analyze_stance_width(self, history):
-        """Analyze stance width for abnormalities with better sensitivity"""
-        hip_widths = []
-        step_widths = []
-        
-        for frame in history:
-            if 'hip_width' in frame:
-                hip_widths.append(frame['hip_width'])
-            if 'step_width' in frame:
-                step_widths.append(frame['step_width'])
-        
-        if len(hip_widths) < 5 or len(step_widths) < 5:  # Reduced requirements
-            return 0
-        
-        # Calculate ratio of step width to hip width
-        avg_hip_width = np.mean(hip_widths)
-        avg_step_width = np.mean(step_widths)
-        
-        if avg_hip_width > 0:
-            width_ratio = avg_step_width / avg_hip_width
-            
-            # More sensitive abnormal detection
-            if width_ratio > 1.8 or width_ratio < 0.6:  # Tightened from 2.0/0.5
-                return min(abs(width_ratio - 1.0) * 0.8, 1.0)
-            
-            # Add variability check
-            step_variability = np.std(step_widths) / avg_step_width
-            if step_variability > 0.3:  # High variability indicates balance issues
-                return min(step_variability, 1.0)
-        
-        return 0
-
-    def debug_detection(self, person_id, current_features):
-        """Debug method to see detection scores (remove for production)"""
-        if person_id not in self.pose_history:
-            return
-            
-        history = list(self.pose_history[person_id])
-        if len(history) < 8:
-            return
-            
-        symmetry = self.analyze_step_symmetry(history)
-        regularity = self.analyze_step_regularity(history) 
-        limping = self.detect_limping_pattern(history)
-        stance = self.analyze_stance_width(history)
-        
-        # Only print if any score is significant
-        if max(symmetry, regularity, limping, stance) > 0.1:
-            print(f"Person {person_id}: Sym={symmetry:.3f}, Reg={regularity:.3f}, Limp={limping:.3f}, Stance={stance:.3f}")

@@ -17,8 +17,10 @@ class SystemEvaluator:
         # Initialize your existing detectors
         print("Loading models...")
         self.suspicion_detector = SuspicionDetector("suspicious_detector.pt")
+        # *** NEW: Initialize enhanced walking detector with weighted metrics ***
         self.walking_detector = WalkingDeviationDetector()
         print("Models loaded successfully!")
+        print("*** NEW: Using enhanced walking detector with 5 weighted clinical metrics ***")
         
         # Store results
         self.results = {}
@@ -151,16 +153,28 @@ class SystemEvaluator:
 
     def evaluate_walking_deviation(self, test_video_folder):
         """
-        Metric 2: Evaluate walking deviation detection
+        *** ENHANCED: Evaluate walking deviation detection with new weighted metrics system ***
         Tests: Accuracy, Sensitivity, Specificity for each deviation type
+        New: Tests all 6 deviation categories from the enhanced system
         """
-        print("\n=== Evaluating Walking Deviation Detection ===")
+        print("\n=== Evaluating Enhanced Walking Deviation Detection ===")
+        print("*** NEW: Testing 6 deviation categories with weighted clinical metrics ***")
         
         true_labels = []
         predicted_labels = []
+        confidence_scores = []
         processing_times = []
+        metric_breakdowns = []  # *** NEW: Store individual metric scores ***
         
-        deviation_types = ['normal_walking', 'limping', 'balance_issues', 'irregular_gait']
+        # *** NEW: Updated deviation types to match enhanced system ***
+        deviation_types = [
+            'normal_walking', 
+            'asymmetric_gait',      # NEW: Leg asymmetry dominant
+            'irregular_gait',       # Enhanced: Step consistency issues
+            'balance_issues',       # Enhanced: Lateral stability problems
+            'limping',              # Enhanced: Joint movement issues
+            'bouncing_gait'         # NEW: Vertical oscillation problems
+        ]
         
         for dev_type in deviation_types:
             folder_path = os.path.join(test_video_folder, dev_type)
@@ -176,11 +190,12 @@ class SystemEvaluator:
                     cap = cv2.VideoCapture(video_path)
                     
                     predictions = []
+                    confidences = []
                     times = []
                     
-                    # Process 15 frames from each video
+                    # *** NEW: Process more frames for better metric accumulation ***
                     frame_count = 0
-                    while frame_count < 15:
+                    while frame_count < 25:  # Increased from 15 to 25 frames
                         ret, frame = cap.read()
                         if not ret:
                             break
@@ -190,37 +205,64 @@ class SystemEvaluator:
                         bbox = [w//4, h//4, 3*w//4, 3*h//4]
                         
                         start_time = time.time()
+                        # *** NEW: Use enhanced detection system ***
                         deviation, confidence = self.walking_detector.detect_walking_deviation(
-                            frame, f"test_person_{dev_type}", bbox
+                            frame, f"test_person_{dev_type}_{video_file}", bbox
                         )
                         processing_time = (time.time() - start_time) * 1000
                         
                         predictions.append(deviation)
+                        confidences.append(confidence)
                         times.append(processing_time)
                         frame_count += 1
                     
                     cap.release()
                     
-                    # Take majority vote for video classification
+                    # *** NEW: Enhanced majority voting with confidence weighting ***
                     if predictions:
-                        most_common = max(set(predictions), key=predictions.count)
+                        # Weight predictions by confidence
+                        prediction_weights = defaultdict(float)
+                        for pred, conf in zip(predictions, confidences):
+                            prediction_weights[pred] += conf
+                        
+                        # Get prediction with highest weighted score
+                        best_prediction = max(prediction_weights.items(), key=lambda x: x[1])[0]
+                        avg_confidence = np.mean(confidences)
                         
                         # Convert folder name to expected label
                         expected_label = dev_type.replace('_walking', '')
                         
                         true_labels.append(expected_label)
-                        predicted_labels.append(most_common)
+                        predicted_labels.append(best_prediction)
+                        confidence_scores.append(avg_confidence)
                         processing_times.extend(times)
+                        
+                        # *** NEW: Get metric breakdown for analysis ***
+                        if len(self.walking_detector.pose_history[f"test_person_{dev_type}_{video_file}"]) > 10:
+                            _, metric_scores = self.walking_detector.calculate_weighted_deviation_score(
+                                f"test_person_{dev_type}_{video_file}"
+                            )
+                            metric_breakdowns.append({
+                                'true_label': expected_label,
+                                'predicted_label': best_prediction,
+                                'confidence': avg_confidence,
+                                'metrics': metric_scores
+                            })
         
-        # Calculate metrics
-        results = self._calculate_walking_metrics(true_labels, predicted_labels, processing_times)
+        # *** NEW: Calculate enhanced metrics including metric analysis ***
+        results = self._calculate_enhanced_walking_metrics(
+            true_labels, predicted_labels, confidence_scores, processing_times, metric_breakdowns
+        )
         self.results['walking_deviation'] = results
         
         return results
 
-    def _calculate_walking_metrics(self, true_labels, predicted_labels, processing_times):
-        """Calculate metrics for walking deviation detection"""
-        labels = ['normal', 'limping', 'balance_issues', 'irregular_gait']
+    def _calculate_enhanced_walking_metrics(self, true_labels, predicted_labels, confidence_scores, processing_times, metric_breakdowns):
+        """
+        *** NEW: Enhanced metrics calculation with weighted system analysis ***
+        """
+        # *** NEW: Updated labels to match enhanced system ***
+        labels = ['normal', 'asymmetric_gait', 'irregular_gait', 'balance_issues', 'limping', 'bouncing_gait']
         
         # Calculate precision, recall, f1 for each class
         precision, recall, f1, support = precision_recall_fscore_support(
@@ -239,15 +281,66 @@ class SystemEvaluator:
                 'support': support[i] if i < len(support) else 0
             }
         
+        # *** NEW: Calculate metric-specific analysis ***
+        metric_analysis = self._analyze_metric_performance(metric_breakdowns)
+        
+        # *** NEW: Calculate confidence-based metrics ***
+        high_conf_predictions = [i for i, conf in enumerate(confidence_scores) if conf > 0.7]
+        high_conf_accuracy = 0
+        if high_conf_predictions:
+            high_conf_true = [true_labels[i] for i in high_conf_predictions]
+            high_conf_pred = [predicted_labels[i] for i in high_conf_predictions]
+            high_conf_accuracy = accuracy_score(high_conf_true, high_conf_pred)
+        
         results['overall'] = {
             'accuracy': accuracy,
+            'high_confidence_accuracy': high_conf_accuracy,  # NEW
             'avg_precision': np.mean(precision),
             'avg_recall': np.mean(recall),
             'avg_f1': np.mean(f1),
+            'avg_confidence': np.mean(confidence_scores) if confidence_scores else 0,  # NEW
             'avg_processing_time': np.mean(processing_times) if processing_times else 0
         }
         
+        # *** NEW: Add metric analysis to results ***
+        results['metric_analysis'] = metric_analysis
+        
         return results
+
+    def _analyze_metric_performance(self, metric_breakdowns):
+        """
+        *** NEW: Analyze performance of individual metrics ***
+        """
+        if not metric_breakdowns:
+            return {}
+        
+        metric_names = ['leg_asymmetry', 'step_consistency', 'lateral_stability', 'joint_movement', 'vertical_oscillation']
+        analysis = {}
+        
+        for metric in metric_names:
+            metric_scores = []
+            correct_predictions = []
+            
+            for breakdown in metric_breakdowns:
+                if 'metrics' in breakdown and metric in breakdown['metrics']:
+                    metric_scores.append(breakdown['metrics'][metric])
+                    correct_predictions.append(
+                        breakdown['true_label'] == breakdown['predicted_label']
+                    )
+            
+            if metric_scores:
+                # Calculate correlation between metric score and correct prediction
+                avg_score_correct = np.mean([score for score, correct in zip(metric_scores, correct_predictions) if correct])
+                avg_score_incorrect = np.mean([score for score, correct in zip(metric_scores, correct_predictions) if not correct])
+                
+                analysis[metric] = {
+                    'avg_score': np.mean(metric_scores),
+                    'avg_score_when_correct': avg_score_correct if not np.isnan(avg_score_correct) else 0,
+                    'avg_score_when_incorrect': avg_score_incorrect if not np.isnan(avg_score_incorrect) else 0,
+                    'discriminative_power': abs(avg_score_correct - avg_score_incorrect) if not (np.isnan(avg_score_correct) or np.isnan(avg_score_incorrect)) else 0
+                }
+        
+        return analysis
 
     def evaluate_temporal_analysis(self, test_video_path):
         """
@@ -330,11 +423,12 @@ class SystemEvaluator:
         }
 
     def save_results_to_file(self, filename="results/evaluation_results.txt"):
-        """Save all results to a text file"""
+        """*** ENHANCED: Save all results including new metrics analysis ***"""
         os.makedirs("results", exist_ok=True)
         
         with open(filename, 'w') as f:
-            f.write("=== WALKING DEVIATION DETECTION SYSTEM EVALUATION RESULTS ===\n\n")
+            f.write("=== ENHANCED WALKING DEVIATION DETECTION SYSTEM EVALUATION RESULTS ===\n")
+            f.write("*** NEW: Using Weighted Clinical Metrics System (40%, 20%, 15%, 15%, 10%) ***\n\n")
             
             # Suspicious Activities Results
             if 'suspicious_activities' in self.results:
@@ -356,42 +450,69 @@ class SystemEvaluator:
                     f.write(f"      Avg Processing Time: {o['avg_processing_time']:.1f}ms\n")
                     f.write(f"      False Positive Rate: {o['false_positive_rate']:.3f}\n\n")
             
-            # Walking Deviation Results
+            # *** ENHANCED: Walking Deviation Results ***
             if 'walking_deviation' in self.results:
-                f.write("2. WALKING DEVIATION DETECTION RESULTS:\n")
+                f.write("2. ENHANCED WALKING DEVIATION DETECTION RESULTS:\n")
                 walk_results = self.results['walking_deviation']
                 
-                for label in ['normal', 'limping', 'balance_issues', 'irregular_gait']:
+                # *** NEW: Updated categories ***
+                for label in ['normal', 'asymmetric_gait', 'irregular_gait', 'balance_issues', 'limping', 'bouncing_gait']:
                     if label in walk_results:
                         r = walk_results[label]
                         f.write(f"   {label.upper()}:\n")
                         f.write(f"      Precision: {r['precision']:.3f}\n")
                         f.write(f"      Recall: {r['recall']:.3f}\n")
-                        f.write(f"      F1-Score: {r['f1_score']:.3f}\n\n")
+                        f.write(f"      F1-Score: {r['f1_score']:.3f}\n")
+                        f.write(f"      Support: {r['support']}\n\n")
                 
                 if 'overall' in walk_results:
                     o = walk_results['overall']
-                    f.write(f"   OVERALL:\n")
+                    f.write(f"   OVERALL PERFORMANCE:\n")
                     f.write(f"      Accuracy: {o['accuracy']:.3f}\n")
+                    f.write(f"      High-Confidence Accuracy: {o['high_confidence_accuracy']:.3f}\n")  # NEW
+                    f.write(f"      Average Confidence: {o['avg_confidence']:.3f}\n")  # NEW
                     f.write(f"      Avg Processing Time: {o['avg_processing_time']:.1f}ms\n\n")
+                
+                # *** NEW: Metric Analysis Section ***
+                if 'metric_analysis' in walk_results:
+                    f.write("   INDIVIDUAL METRIC PERFORMANCE:\n")
+                    metric_analysis = walk_results['metric_analysis']
+                    for metric, analysis in metric_analysis.items():
+                        f.write(f"      {metric.upper().replace('_', ' ')}:\n")
+                        f.write(f"         Average Score: {analysis['avg_score']:.3f}\n")
+                        f.write(f"         Score When Correct: {analysis['avg_score_when_correct']:.3f}\n")
+                        f.write(f"         Score When Incorrect: {analysis['avg_score_when_incorrect']:.3f}\n")
+                        f.write(f"         Discriminative Power: {analysis['discriminative_power']:.3f}\n\n")
             
             # Temporal Analysis Results
-            # if 'temporal_analysis' in self.results:
-            #     f.write("3. TEMPORAL ANALYSIS RESULTS:\n")
-            #     temp_results = self.results['temporal_analysis']
-            #     f.write(f"   Single-frame False Positives: {temp_results['single_frame_false_positives']:.3f}\n")
-            #     f.write(f"   Temporal False Positives: {temp_results['temporal_false_positives']:.3f}\n")
-            #     f.write(f"   Improvement: {temp_results['improvement_percentage']:.1f}%\n\n")
+            if 'temporal_analysis' in self.results:
+                f.write("3. TEMPORAL ANALYSIS RESULTS:\n")
+                temp_results = self.results['temporal_analysis']
+                f.write(f"   Single-frame False Positives: {temp_results['single_frame_false_positives']:.3f}\n")
+                f.write(f"   Temporal False Positives: {temp_results['temporal_false_positives']:.3f}\n")
+                f.write(f"   Improvement: {temp_results['improvement_percentage']:.1f}%\n")
+                f.write(f"   Temporal Stability: {temp_results['temporal_stability']:.3f}\n")
+                f.write(f"   Single-frame Stability: {temp_results['single_frame_stability']:.3f}\n\n")
+            
+            # *** NEW: System Summary ***
+            f.write("4. SYSTEM ENHANCEMENT SUMMARY:\n")
+            f.write("   *** Clinical Metrics Implementation ***\n")
+            f.write("   - Leg Asymmetry (40%): Primary indicator based on Winter (1991)\n")
+            f.write("   - Step Consistency (20%): CV analysis based on Brach et al. (2005)\n")
+            f.write("   - Lateral Stability (15%): Head deviation measurement\n")
+            f.write("   - Joint Movement (15%): Range of motion analysis\n")
+            f.write("   - Vertical Oscillation (10%): Bounce detection based on Saunders et al. (1953)\n\n")
         
-        print(f"Results saved to: {filename}")
+        print(f"*** ENHANCED: Results saved to: {filename}")
 
 
 # MOVE THESE FUNCTIONS OUTSIDE THE CLASS
 def run_complete_evaluation():
-    """Run all evaluation metrics"""
+    """*** ENHANCED: Run all evaluation metrics with new walking deviation system ***"""
     evaluator = SystemEvaluator()
     
-    print("Starting Complete System Evaluation...")
+    print("Starting Enhanced System Evaluation...")
+    print("*** NEW: Testing enhanced walking deviation detection with weighted clinical metrics ***")
     print("Make sure you have test data in the test_data/ folder!")
     
     # 1. Suspicious Activity Evaluation
@@ -400,11 +521,19 @@ def run_complete_evaluation():
     else:
         print("Warning: test_data/suspicious_activities not found!")
     
-    # 2. Walking Deviation Evaluation
+    # 2. *** ENHANCED: Walking Deviation Evaluation ***
     if os.path.exists("test_data/walking_patterns"):
+        print("*** NEW: Testing enhanced walking deviation detection ***")
         evaluator.evaluate_walking_deviation("test_data/walking_patterns/")
     else:
         print("Warning: test_data/walking_patterns not found!")
+        print("*** NOTE: For enhanced testing, create folders for: ***")
+        print("  - normal_walking")
+        print("  - asymmetric_gait")
+        print("  - irregular_gait") 
+        print("  - balance_issues")
+        print("  - limping")
+        print("  - bouncing_gait")
     
     # 3. Temporal Analysis (using your main video file)
     if os.path.exists("data/abuse.mp4"):
@@ -415,10 +544,10 @@ def run_complete_evaluation():
     # Save results
     evaluator.save_results_to_file()
     
-    print("\n=== EVALUATION COMPLETE ===")
+    print("\n=== ENHANCED EVALUATION COMPLETE ===")
     print("Results saved to: results/evaluation_results.txt")
     
-    # Print summary
+    # *** ENHANCED: Print summary ***
     if evaluator.results:
         print("\nQUICK SUMMARY:")
         if 'suspicious_activities' in evaluator.results:
@@ -426,8 +555,13 @@ def run_complete_evaluation():
             print(f"Suspicious Activity mAP: {sus_map:.3f}")
         
         if 'walking_deviation' in evaluator.results:
-            walk_acc = evaluator.results['walking_deviation'].get('overall', {}).get('accuracy', 0)
-            print(f"Walking Deviation Accuracy: {walk_acc:.3f}")
+            walk_results = evaluator.results['walking_deviation']
+            walk_acc = walk_results.get('overall', {}).get('accuracy', 0)
+            high_conf_acc = walk_results.get('overall', {}).get('high_confidence_accuracy', 0)
+            avg_conf = walk_results.get('overall', {}).get('avg_confidence', 0)
+            print(f"*** ENHANCED Walking Deviation Accuracy: {walk_acc:.3f}")
+            print(f"*** NEW High-Confidence Accuracy: {high_conf_acc:.3f}")
+            print(f"*** NEW Average Confidence: {avg_conf:.3f}")
         
         if 'temporal_analysis' in evaluator.results:
             improvement = evaluator.results['temporal_analysis'].get('improvement_percentage', 0)

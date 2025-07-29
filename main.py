@@ -82,62 +82,33 @@ while ret:
     # 2. Tracking (with OSNet feature extraction inside)
     tracker.update(frame, detections)
 
-    # --- Pose detection and walking deviation analysis ---
-    pose_results = pose_model(frame)
-    walking_deviations = {}  # Maps global_id to walking deviation status
+    # *** NEW: Enhanced Walking Deviation Analysis with Weighted Metrics System ***
+    walking_deviations = {}  # Maps global_id to (deviation_category, confidence)
     
-    if pose_results and pose_results[0].keypoints is not None:
-        for i, pose_result in enumerate(pose_results):
-            if pose_result.boxes is not None and pose_result.keypoints is not None:
-                for j, pose_box in enumerate(pose_result.boxes.data.tolist()):
-                    pose_x1, pose_y1, pose_x2, pose_y2, pose_score, pose_class_id = pose_box
-                    
-                    if int(pose_class_id) == 0 and pose_score > DETECTION_THRESHOLD:
-                        # Get keypoints for this detection
-                        if j < len(pose_result.keypoints.data):
-                            keypoints = pose_result.keypoints.data[j].cpu().numpy()
-                            
-                            # Match pose detection to tracked person
-                            best_match_track = None
-                            best_overlap = 0
-                            
-                            for track in tracker.tracks:
-                                tbx1, tby1, tbx2, tby2 = map(int, track.bbox)
-                                
-                                # Calculate intersection area
-                                inter_x1 = max(pose_x1, tbx1)
-                                inter_y1 = max(pose_y1, tby1)
-                                inter_x2 = min(pose_x2, tbx2)
-                                inter_y2 = min(pose_y2, tby2)
-                                
-                                if inter_x2 > inter_x1 and inter_y2 > inter_y1:
-                                    intersection = (inter_x2 - inter_x1) * (inter_y2 - inter_y1)
-                                    pose_area = (pose_x2 - pose_x1) * (pose_y2 - pose_y1)
-                                    track_area = (tbx2 - tbx1) * (tby2 - tby1)
-                                    
-                                    # Calculate IoU
-                                    union = pose_area + track_area - intersection
-                                    if union > 0:
-                                        overlap = intersection / union
-                                        if overlap > best_overlap:
-                                            best_overlap = overlap
-                                            best_match_track = track
-                            
-                            # If we found a good match, analyze walking pattern
-                            if best_match_track is not None and best_overlap > 0.3:
-                                local_id = best_match_track.track_id
-                                feature = best_match_track.feature
-                                
-                                # Get or create global ID
-                                global_id = db_manager.match_or_create_person(feature, CAMERA_ID, best_match_track.bbox)
-                                
-                                # Extract pose features and analyze walking pattern
-                                pose_features = walking_detector.extract_pose_features(keypoints)
-                                is_deviation, deviation_category = walking_detector.analyze_gait_pattern(global_id, pose_features)
-                                
-                                if is_deviation:
-                                    walking_deviations[global_id] = "walking_deviation"
-                                    print(f"Walking deviation detected for person {global_id}")
+    # *** NEW: Process each tracked person for walking deviation using 5 clinical metrics ***
+    for track in tracker.tracks:
+        local_id = track.track_id
+        feature = track.feature
+        bbox = track.bbox
+        
+        # Get or create global ID first
+        global_id = db_manager.match_or_create_person(feature, CAMERA_ID, bbox)
+        
+        # *** NEW: Analyze walking pattern using weighted metrics system ***
+        # Metrics: Leg Asymmetry (40%), Step Consistency (20%), Lateral Stability (15%), 
+        #          Joint Movement (15%), Vertical Oscillation (10%)
+        deviation_category, confidence = walking_detector.detect_walking_deviation(
+            frame, global_id, bbox
+        )
+        
+        # *** NEW: Store result if deviation detected with enhanced classification ***
+        if deviation_category != "normal":
+            walking_deviations[global_id] = (deviation_category, confidence)
+            # *** NEW: Enhanced debug output with confidence scores ***
+            print(f"Walking deviation detected for person {global_id}: {deviation_category} (confidence: {confidence:.2f})")
+
+    # --- ORIGINAL: Pose detection and walking deviation analysis (REMOVED/REPLACED) ---
+    # *** REMOVED: Old pose detection logic replaced with enhanced weighted system above ***
 
     # --- Run suspicious activity detection ---
     suspicion_map = {}  # 🆕 Maps global_id to suspicious_category
@@ -154,10 +125,10 @@ while ret:
                 global_id = db_manager.match_or_create_person(feature, CAMERA_ID, track.bbox, suspicious_category=label)
                 suspicion_map[global_id] = label
 
-    # --- Combine suspicion results with walking deviation results ---
-    for global_id, deviation in walking_deviations.items():
+    # *** NEW: Enhanced combination of suspicion results with walking deviation results ***
+    for global_id, (deviation_category, confidence) in walking_deviations.items():
         if global_id not in suspicion_map:
-            suspicion_map[global_id] = deviation
+            suspicion_map[global_id] = deviation_category
 
     # 3. Database Matching and Profile Update
     for track in tracker.tracks:
@@ -195,6 +166,11 @@ while ret:
         label = f"Person: {display_id}"  # 🆕 Always show Person ID
         if suspicious_category != "normal":
             label += f" | {suspicious_category}"  # 🆕 Add suspicion tag if any
+            
+            # *** NEW: Add confidence score for walking deviations ***
+            if global_id in walking_deviations:
+                _, confidence = walking_deviations[global_id]
+                label += f" ({confidence:.2f})"
         
         # Now get size of text box (after label is defined and with correct font constant)
         (text_w, text_h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
