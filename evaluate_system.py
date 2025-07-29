@@ -25,7 +25,7 @@ class SystemEvaluator:
 
     def evaluate_suspicious_activities(self, test_folder):
         """
-        Metric 1: Evaluate your YOLOv8 suspicious activity detection
+        Metric 1: Evaluate YOLOv8 suspicious activity detection
         Tests: Precision, Recall, F1-Score, mAP, Processing Time
         """
         print("\n=== Evaluating Suspicious Activity Detection ===")
@@ -376,12 +376,12 @@ class SystemEvaluator:
                     f.write(f"      Avg Processing Time: {o['avg_processing_time']:.1f}ms\n\n")
             
             # Temporal Analysis Results
-            if 'temporal_analysis' in self.results:
-                f.write("3. TEMPORAL ANALYSIS RESULTS:\n")
-                temp_results = self.results['temporal_analysis']
-                f.write(f"   Single-frame False Positives: {temp_results['single_frame_false_positives']:.3f}\n")
-                f.write(f"   Temporal False Positives: {temp_results['temporal_false_positives']:.3f}\n")
-                f.write(f"   Improvement: {temp_results['improvement_percentage']:.1f}%\n\n")
+            # if 'temporal_analysis' in self.results:
+            #     f.write("3. TEMPORAL ANALYSIS RESULTS:\n")
+            #     temp_results = self.results['temporal_analysis']
+            #     f.write(f"   Single-frame False Positives: {temp_results['single_frame_false_positives']:.3f}\n")
+            #     f.write(f"   Temporal False Positives: {temp_results['temporal_false_positives']:.3f}\n")
+            #     f.write(f"   Improvement: {temp_results['improvement_percentage']:.1f}%\n\n")
         
         print(f"Results saved to: {filename}")
 
@@ -407,10 +407,10 @@ def run_complete_evaluation():
         print("Warning: test_data/walking_patterns not found!")
     
     # 3. Temporal Analysis (using your main video file)
-    if os.path.exists("data/shooting.mp4"):
-        evaluator.evaluate_temporal_analysis("data/shooting.mp4")
+    if os.path.exists("data/abuse.mp4"):
+        evaluator.evaluate_temporal_analysis("data/abuse.mp4")
     else:
-        print("Warning: data/shooting.mp4 not found!")
+        print("Warning: data/abuse.mp4 not found!")
     
     # Save results
     evaluator.save_results_to_file()

@@ -17,7 +17,7 @@ from walking_deviation_detector import WalkingDeviationDetector
 CAMERA_ID = "Camera_A" # Unique ID for this camera stream
 # MONGO_URI = "mongodb+srv://kusal:1234@cluster-cctv.7sultup.mongodb.net/?retryWrites=true&w=majority&appName=Cluster-CCTV" # Your MongoDB connection string
 MONGO_URI = "mongodb+srv://dulaniruwanthika99:zxEA6iEfqb8xKCnb@cluster-cctv.cbpifgp.mongodb.net/?retryWrites=true&w=majority&appName=Cluster-CCTV"
-VIDEO_PATH = os.path.join('.', 'data', 'shooting.mp4')
+VIDEO_PATH = os.path.join('.', 'data', 'abuse.mp4')
 VIDEO_OUT_PATH = os.path.join('.', 'out.mp4')
 DETECTION_THRESHOLD = 0.5
 # Email recipients
@@ -52,8 +52,8 @@ DISPLAY_WIDTH = 1280
 DISPLAY_HEIGHT = 720
 
 # Create named window with fixed size
-cv2.namedWindow('Video Tracking', cv2.WINDOW_NORMAL)
-cv2.resizeWindow('Video Tracking', DISPLAY_WIDTH, DISPLAY_HEIGHT)
+# cv2.namedWindow('Video Tracking', cv2.WINDOW_NORMAL)
+# cv2.resizeWindow('Video Tracking', DISPLAY_WIDTH, DISPLAY_HEIGHT)
 
 # --- NEW: MAPPING FOR DISPLAY IDs ---
 # This dictionary maps the long global_id from DB to a simple display ID
@@ -82,7 +82,7 @@ while ret:
     # 2. Tracking (with OSNet feature extraction inside)
     tracker.update(frame, detections)
 
-    # --- NEW: Pose detection and walking deviation analysis ---
+    # --- Pose detection and walking deviation analysis ---
     pose_results = pose_model(frame)
     walking_deviations = {}  # Maps global_id to walking deviation status
     
@@ -139,7 +139,7 @@ while ret:
                                     walking_deviations[global_id] = "walking_deviation"
                                     print(f"Walking deviation detected for person {global_id}")
 
-    # --- NEW: Run suspicious activity detection ---
+    # --- Run suspicious activity detection ---
     suspicion_map = {}  # 🆕 Maps global_id to suspicious_category
     suspicion_results = suspicion_detector.model(frame)[0]
     for box in suspicion_results.boxes:
@@ -180,14 +180,14 @@ while ret:
         # Get suspicious category (if exists from detection), default to 'normal'
         suspicious_category = suspicion_map.get(global_id, "normal")
 
-        # --- 🆕 Update person with suspicion category ---
+        # --- Update person with suspicion category ---
         db_manager.update_person(global_id, feature, CAMERA_ID, bbox, suspicious_category)
 
         # 4. Visualization
         x1, y1, x2, y2 = map(int, bbox)
         color = colors[display_id % len(colors)] # Use display_id for color consistency
 
-        # --- 🆕 Dynamic font scale based on box height ---
+        # --- Dynamic font scale based on box height ---
         bbox_height = y2 - y1
         font_scale = max(0.4, min(1.0, bbox_height / 100))  # scale between 0.4 and 1.0
         thickness = max(1, int(font_scale * 2))
@@ -232,10 +232,10 @@ while ret:
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
         cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, thickness)
 
-    display_frame = cv2.resize(frame, (DISPLAY_WIDTH, DISPLAY_HEIGHT))
+    # display_frame = cv2.resize(frame, (DISPLAY_WIDTH, DISPLAY_HEIGHT))
 
     # Display and save frame
-    cv2.imshow('Video Tracking', display_frame)
+    cv2.imshow('Video Tracking', frame)
     cap_out.write(frame)
     ret, frame = cap.read()
 
